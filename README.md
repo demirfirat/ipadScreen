@@ -20,6 +20,80 @@ There are two ways to view the stream on the iPad:
   an MJPEG stream (`multipart/x-mixed-replace`) and runs no JavaScript, so it
   works even in iOS 6 Safari.
 
+## Quick start
+
+Uses the prebuilt files from the
+[latest release](https://github.com/demirfirat/ipadScreen/releases/latest).
+Steps marked **(manual)** need a person at the Mac or the iPad; the rest are
+commands. Each step ends with how to check it worked.
+
+1. **Mac tools.**
+
+   ```bash
+   xcode-select --install            # skip if already installed
+   brew install --cask betterdisplay
+   brew install libimobiledevice     # provides iproxy, for USB mode
+   ```
+
+   Check: `which iproxy` prints a path.
+
+2. **Virtual display (manual).** Open BetterDisplay, create a new virtual
+   screen with a **4:3** aspect ratio, turn on **Connect this virtual
+   screen**, and in System Settings › Displays set it to **Extended display**
+   (not mirroring). See [Virtual display](#virtual-display).
+
+   Check: System Settings › Displays lists it as a separate display.
+
+3. **Mac app.**
+
+   ```bash
+   curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.0-macOS.zip
+   ditto -x -k iPadScreen-1.0.0-macOS.zip /Applications
+   open /Applications/iPadScreen.app
+   ```
+
+   The app isn't notarized. `curl` downloads aren't quarantined, so it opens
+   directly; if you downloaded it with a browser and macOS blocks it, open
+   System Settings › Privacy & Security and click **Open Anyway**.
+
+4. **Screen Recording permission (manual).** Press **Start** in the app,
+   allow iPadScreen in System Settings › Privacy & Security › Screen
+   Recording, then relaunch the app when it asks.
+
+   Check: after pressing **Start** the window shows it's running and a
+   four-digit pairing code.
+
+5. **iPad prerequisites (manual).** A jailbroken iPad (see
+   [Requirements](#requirements)) with **OpenSSH** installed from Cydia, on
+   the same network as the Mac. Its IP is under Settings › Wi-Fi › (i). The
+   default SSH password is `alpine`; change it (see [Security](#security)).
+
+6. **iPad app.**
+
+   ```bash
+   IPAD=192.168.1.50                 # your iPad's IP
+   curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.0-iOS.deb
+   scp -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa iPadScreen-1.0.0-iOS.deb root@$IPAD:/tmp/
+   ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa root@$IPAD \
+     'dpkg -i /tmp/iPadScreen-1.0.0-iOS.deb && su mobile -c uicache'
+   ```
+
+   The `-o` options are needed because iOS's old OpenSSH only offers
+   `ssh-rsa` keys. If `scp` fails with a connection error, add `-O`.
+
+   Check: an **iPadScreen** icon appears on the home screen (if not, run
+   `ssh ... root@$IPAD 'killall -9 SpringBoard'`).
+
+7. **Connect (manual).** Plug the iPad into the Mac with a USB cable and open
+   iPadScreen on the iPad. It pairs over the cable without a code.
+
+   Check: the Mac window shows the connection as USB and the iPad shows the
+   virtual display. From now on it also connects over Wi-Fi without the
+   cable, on its own.
+
+To build everything yourself instead, see [Mac app](#mac-app) and
+[iPad app](#ipad-app).
+
 ## Performance
 
 Measured on an iPad 2 (A5) with a 1024×768 stream:
@@ -40,6 +114,8 @@ Past that point the bottleneck is decode speed, not bandwidth.
 
 **Mac**
 
+- Xcode Command Line Tools, only to build from source
+  (`xcode-select --install`)
 - macOS 14 or later, Intel or Apple Silicon (universal binary). Tested on
   an M1 Mac mini with macOS 26; older Intel Macs may encode more slowly.
 - [BetterDisplay](https://betterdisplay.pro) to create the virtual display
@@ -71,8 +147,9 @@ Past that point the bottleneck is decode speed, not bandwidth.
 cp -R build/iPadScreen.app /Applications/
 ```
 
-On first launch right-click the app and choose **Open** to get past
-Gatekeeper. Press **Start**, grant Screen Recording permission, and relaunch
+The app isn't notarized, so a copy downloaded with a browser is blocked on
+first launch: open System Settings › Privacy & Security and click **Open
+Anyway**. Press **Start**, grant Screen Recording permission, and relaunch
 when asked. macOS only applies the permission after a relaunch.
 
 ### Keeping the permission across rebuilds (optional)
@@ -129,23 +206,39 @@ works fine with just the Command Line Tools, so clone it directly as above.
 
 You also need a real `iPhoneOS6.1.sdk` in `~/theos/sdks/`. The SDKs from
 `theos/sdks` start at 9.3, and the 9.3 one only has simulator `.tbd` stubs
-that won't link for a device. One source is the `v1.0` release of
-[growtopiajaw/iPhoneOS-SDK](https://github.com/growtopiajaw/iPhoneOS-SDK).
+that won't link for a device. This one comes from
+[growtopiajaw/iPhoneOS-SDK](https://github.com/growtopiajaw/iPhoneOS-SDK)
+(244 MB):
+
+```bash
+curl -L -o /tmp/iPhoneOS6.1.sdk.zip \
+  https://github.com/growtopiajaw/iPhoneOS-SDK/releases/download/v1.0/iPhoneOS6.1.sdk.zip
+shasum -a 256 /tmp/iPhoneOS6.1.sdk.zip
+# expect 2696df17fc48e1b6ea3f7acd346b5f2356fb5c6cc60b0f3aaca0c24522d761de
+unzip -q /tmp/iPhoneOS6.1.sdk.zip -d ~/theos/sdks/
+ls ~/theos/sdks/iPhoneOS6.1.sdk/SDKSettings.plist   # should exist
+```
 
 ### Build and install
 
 ```bash
 cd ios
 make package
-scp packages/*.deb root@<ipad-ip>:/tmp/
-ssh root@<ipad-ip> 'dpkg -i /tmp/com.george.ipadscreen_*.deb && \
+IPAD=192.168.1.50                 # your iPad's IP
+scp -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa packages/*.deb root@$IPAD:/tmp/
+ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa root@$IPAD 'dpkg -i /tmp/com.george.ipadscreen_*.deb && \
   chown -R mobile:mobile /Applications/IPadScreen.app && \
   su mobile -c uicache && killall -9 SpringBoard'
 ```
 
 iOS 6's OpenSSH only offers `ssh-rsa` host keys, which modern OpenSSH
-refuses. Add `-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa`
-or put them in `~/.ssh/config`.
+refuses, hence the `-o` options. To skip them, put this in `~/.ssh/config`:
+
+```
+Host 192.168.1.50
+    HostKeyAlgorithms +ssh-rsa
+    PubkeyAcceptedAlgorithms +ssh-rsa
+```
 
 `uicache` has to run as `mobile`; run as root it fails with "cannot open
 cache file".
@@ -287,6 +380,21 @@ both. In USB mode the stream falls back to Wi-Fi while no cable is attached.
 | `package.sh`                 | builds `iPadScreen.app`                     |
 | `setup-signing.sh`           | optional local signing certificate          |
 | `install-cli.sh`             | installs the command-line binary            |
+| `release.sh`                 | builds the release files into `build/release/` |
+
+## Making a release
+
+```bash
+./release.sh
+```
+
+It builds the Mac app signed ad-hoc (a local certificate from
+`setup-signing.sh` would mean nothing on other Macs), zips it, builds the
+iPad `.deb` without debug flags, and writes `SHA256SUMS.txt`. Build paths are
+stripped from the Mac binary. Upload the three files from `build/release/`
+to a GitHub release tagged `v<version>`. The version lives in `package.sh`
+and `ios/control`; the Quick start links use the file names, so update them
+when the version changes.
 
 ## License
 

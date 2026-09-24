@@ -3,10 +3,15 @@
 # Builds iPadScreen.app: a universal (Intel + Apple Silicon) macOS app that
 # runs by double-clicking, with no Swift, Xcode or terminal required.
 #
-# Usage: ./package.sh
+# Usage: ./package.sh [--adhoc]
+#   --adhoc  sign ad-hoc even if a local certificate exists (for builds
+#            handed to other people; see release.sh)
 set -e
 
 cd "$(dirname "$0")"
+
+ADHOC=0
+[ "$1" = "--adhoc" ] && ADHOC=1
 
 VERSION="1.0.0"
 APP="build/iPadScreen.app"
@@ -18,11 +23,15 @@ echo "  Packaging iPadScreen.app $VERSION…"
 echo ""
 
 # --- Build -----------------------------------------------------------------
+# Map the source directory to "." so absolute build paths (which contain the
+# builder's user name) don't end up in #file strings or debug info.
+FLAGS=(-c release -Xswiftc -file-prefix-map -Xswiftc "$PWD=.")
+
 echo "  → building arm64…"
-swift build -c release --triple arm64-apple-macosx14.0 >/dev/null
+swift build "${FLAGS[@]}" --triple arm64-apple-macosx14.0 >/dev/null
 
 echo "  → building x86_64…"
-swift build -c release --triple x86_64-apple-macosx14.0 >/dev/null
+swift build "${FLAGS[@]}" --triple x86_64-apple-macosx14.0 >/dev/null
 
 # --- Bundle ----------------------------------------------------------------
 rm -rf "$APP"
@@ -39,6 +48,8 @@ else
     cp "$ARM" "$APP/Contents/MacOS/iPadScreen"
 fi
 chmod +x "$APP/Contents/MacOS/iPadScreen"
+# Drop debug symbols; they only carry build-machine paths.
+strip -S "$APP/Contents/MacOS/iPadScreen"
 
 # --- Info.plist ------------------------------------------------------------
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -76,14 +87,16 @@ PLIST
 # time. A local certificate gives the app a stable identity and the
 # permission survives rebuilds. Create one with ./setup-signing.sh.
 IDENTITY="iPadScreen Local Signing"
-if security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
+if [ "$ADHOC" = 0 ] && security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
     codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null \
         && echo "  → signed ($IDENTITY)" \
         || { echo "  ✗ signing with '$IDENTITY' failed"; exit 1; }
 else
     codesign --force --deep --sign - "$APP" 2>/dev/null && echo "  → signed (ad-hoc)"
-    echo "    Note: Screen Recording permission will reset on every build."
-    echo "          Run ./setup-signing.sh once to make it stick."
+    if [ "$ADHOC" = 0 ]; then
+        echo "    Note: Screen Recording permission will reset on every build."
+        echo "          Run ./setup-signing.sh once to make it stick."
+    fi
 fi
 
 # --- Done ------------------------------------------------------------------
@@ -93,6 +106,7 @@ echo "  ✓ Done: $PWD/$APP  ($SIZE)"
 echo ""
 echo "  To install on another Mac:"
 echo "    1. Copy iPadScreen.app to /Applications"
-echo "    2. On first launch: right-click › Open (Gatekeeper warning)"
+echo "    2. On first launch macOS blocks it (not notarized): open System"
+echo "       Settings › Privacy & Security and click Open Anyway"
 echo "    3. Install BetterDisplay for the virtual display"
 echo ""
