@@ -40,7 +40,8 @@ Past that point the bottleneck is decode speed, not bandwidth.
 
 **Mac**
 
-- macOS 14 or later, Intel or Apple Silicon
+- macOS 14 or later, Intel or Apple Silicon (universal binary). Tested on
+  an M1 Mac mini with macOS 26; older Intel Macs may encode more slowly.
 - [BetterDisplay](https://betterdisplay.pro) to create the virtual display
   (`brew install --cask betterdisplay`). Creating a virtual screen is part of
   the free version.
@@ -48,8 +49,20 @@ Past that point the bottleneck is decode speed, not bandwidth.
 
 **iPad**
 
-- Safari mode: any iPad that can reach the Mac over the network
-- Native app: a jailbroken iPad with OpenSSH, iOS 6 or later (armv7)
+- Safari mode: no jailbreak needed. Any device with a browser that can
+  reach the Mac over the network (slower, Wi-Fi only).
+- Native app: a jailbroken iPad with OpenSSH, iOS 6 or later, that can run
+  32-bit (armv7) apps.
+
+| Device                              | Native app                                         |
+|-------------------------------------|----------------------------------------------------|
+| iPad 2                              | Tested (iOS 6.1.3)                                 |
+| iPad 3, iPad 4, iPad mini (1st gen) | Expected to work, untested. On the iPad 3 keep the virtual display at 1024×768; Retina resolution is heavy for its decoder |
+| Same devices on iOS 7–9             | Probably works, untested                           |
+| iPad Air, iPad mini 2/3 on iOS ≤ 10 | Should work in theory (32-bit apps still run), untested |
+| Any iPad on iOS 11 or later         | No: 32-bit apps don't run                          |
+| iPad (1st gen)                      | No: tops out at iOS 5.1.1. Use Safari mode         |
+| iPhone / iPod touch                 | No: the app is built for iPad only. Use Safari mode |
 
 ## Mac app
 
