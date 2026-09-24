@@ -342,6 +342,8 @@ sends newline-terminated UTF-8 lines back.
 
 **Wi-Fi handshake.** The iPad opens `GET /raw?id=<device id>&cn=<nonce>`,
 where both are 32 lowercase hex characters and the nonce is fresh each time.
+It may add `&mode=usb` to ask the Mac to switch to USB; the Mac honours that
+even before the handshake, since it only opens the cable path.
 After the header the Mac sends one of:
 
 | Mac sends        | Meaning                    | iPad answers                          |
@@ -395,6 +397,12 @@ stripped from the Mac binary. Upload the three files from `build/release/`
 to a GitHub release tagged `v<version>`. The version lives in `package.sh`
 and `ios/control`; the Quick start links use the file names, so update them
 when the version changes.
+
+## Contributing
+
+Tested on one iPad and one Mac so far. Device reports, bug fixes and ports of
+the host side to Windows or Linux are welcome; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
