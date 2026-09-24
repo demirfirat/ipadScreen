@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Packaged Mac app (package.sh)
+build/
+
+# theos build output and packages (iOS app)
+ios/.theos/
+ios/packages/
+ios/obj/
+
+# Intermediate icon set; AppIcon.icns is generated from it and committed
+assets/icon.iconset/

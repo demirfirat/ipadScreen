@@ -1,0 +1,9 @@
+Package: com.george.ipadscreen
+Name: iPadScreen
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Mirrors a Mac display to the iPad. Native client for the raw JPEG stream.
+Maintainer: George
+Author: George
+Section: Utilities
+Depends: firmware (>= 6.0)

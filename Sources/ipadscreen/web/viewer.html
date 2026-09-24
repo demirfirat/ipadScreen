@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+<!-- Opened via Add to Home Screen, the page runs full screen without
+     Safari's toolbars. That's the only way to use the whole screen. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>iPadScreen</title>
+<style>
+  * { margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* Fit the picture to the screen without distortion.
+     iOS 6 has no `object-fit`, so the server computes the aspect ratio and
+     writes it in here. On a mismatch the picture is centered and
+     letterboxed instead of stretched, so text and circles look right even
+     on a non-4:3 virtual display. */
+  #screen {
+    position: absolute;
+    /* Not centered with percentage margins: in CSS a vertical margin
+       percentage is relative to the width, which throws vertical centering
+       off. The offsets are given directly as top/left instead. */
+    top: {{OFFSET_Y}}%;
+    left: {{OFFSET_X}}%;
+    width: {{VIEW_W}}%;
+    height: {{VIEW_H}}%;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<!-- This tag is the whole stream. The browser decodes the
+     multipart/x-mixed-replace stream itself and draws each new frame over
+     the previous one. -->
+<img id="screen" src="/stream?code={{CODE}}" alt="">
+
+</body>
+</html>
