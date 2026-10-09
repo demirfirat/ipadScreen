@@ -21,7 +21,16 @@ IPadScreen_PRIVATE_FRAMEWORKS =
 IPadScreen_CFLAGS = -fno-objc-arc -Wno-deprecated-declarations -O2 \
                     -Ivendor/libjpeg-turbo/include
 
+# Recent Apple linkers emit a stub format (__picsymbolstub5, no lazy binding)
+# that iOS 6's dyld doesn't understand: the app crashes at launch jumping to
+# a bad address. The classic linker still produces the old format. Without
+# it, the build still works but the app may not start; see the README.
+LD_CLASSIC := $(shell xcrun -f ld-classic 2>/dev/null)
+
 IPadScreen_LDFLAGS = -Lvendor/libjpeg-turbo/lib -ljpeg
+ifneq ($(LD_CLASSIC),)
+IPadScreen_LDFLAGS += -fuse-ld=$(LD_CLASSIC)
+endif
 
 include $(THEOS_MAKE_PATH)/application.mk
 

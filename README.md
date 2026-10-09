@@ -243,6 +243,17 @@ Host 192.168.1.50
 `uicache` has to run as `mobile`; run as root it fails with "cannot open
 cache file".
 
+If the app closes right after you tap its icon, it crashed at launch
+(`EXC_BAD_ACCESS` with `pc` at an invalid address in the crash log). Recent
+Apple linkers emit a stub format (`__picsymbolstub5`, no lazy binding) that
+iOS 6's dyld doesn't understand. The Makefile avoids this by linking with
+`ld-classic` from the Command Line Tools (found with `xcrun -f ld-classic`).
+If your toolchain has no `ld-classic`, install a `.deb` from the
+[releases page](https://github.com/demirfirat/ipadScreen/releases) or build
+with an older Command Line Tools / Xcode. You can check a build with
+`otool -l IPadScreen | grep picsymbolstub`: it should say `__picsymbolstub4`.
+Crash logs are in `/var/mobile/Library/Logs/CrashReporter/` on the iPad.
+
 ### Notes for iOS 6 builds
 
 - **No ARC.** Modern Command Line Tools don't ship `libarclite_iphoneos.a`,

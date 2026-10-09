@@ -13,15 +13,21 @@ echo ""
 echo "  Installing ipadscreen CLI…"
 echo ""
 
-if [ ! -f ".build/release/ipadscreen" ] || [ "Sources" -nt ".build/release/ipadscreen" ]; then
+# Where SwiftPM puts the product depends on the toolchain version, so ask it
+# instead of hardcoding .build/release.
+BIN="$(swift build -c release --show-bin-path)/ipadscreen"
+
+if [ ! -f "$BIN" ] || [ "Sources" -nt "$BIN" ]; then
     echo "  → building (about a minute the first time)…"
     swift build -c release
 else
     echo "  → already built, skipping"
 fi
 
+[ -f "$BIN" ] || { echo "  ✗ build finished but $BIN is missing"; exit 1; }
+
 mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/.build/release/ipadscreen" "$HOME/.local/bin/ipadscreen"
+ln -sf "$BIN" "$HOME/.local/bin/ipadscreen"
 echo "  → linked: ~/.local/bin/ipadscreen"
 
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then

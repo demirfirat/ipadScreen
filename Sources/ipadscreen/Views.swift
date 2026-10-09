@@ -11,6 +11,7 @@ struct MenuBarPanel: View {
         VStack(spacing: 0) {
             header
             Divider()
+            AlertBanner(state: state)
             controls
             Divider()
             stats
@@ -104,6 +105,7 @@ struct MainWindow: View {
 
     private var preview: some View {
         VStack(spacing: 14) {
+            AlertBanner(state: state)
             HStack {
                 StatusBadge(state: state)
                 Spacer()
@@ -163,6 +165,41 @@ struct MainWindow: View {
 }
 
 // MARK: - Shared components
+
+/// A prominent warning for problems that stop streaming, such as a missing
+/// virtual display. The small status badge alone was easy to miss.
+struct AlertBanner: View {
+    @ObservedObject var state: AppState
+
+    var body: some View {
+        if !state.statusText.isEmpty && !state.isRunning {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(state.statusText)
+                        .font(.system(size: 12, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if state.statusText.contains("virtual display") {
+                        Text("Checking again automatically…")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Try again") { state.onStartStop?(true) }
+                        .controlSize(.small)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.5)))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+    }
+}
 
 struct StatusBadge: View {
     @ObservedObject var state: AppState

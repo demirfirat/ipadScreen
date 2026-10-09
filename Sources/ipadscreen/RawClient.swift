@@ -366,22 +366,43 @@ final class RawStreamClient: FrameSink {
         })
     }
 
+    /// Newest frame that arrived while the queue was full. It is sent as
+    /// soon as a slot frees up; otherwise the last frame of a burst (say,
+    /// the cursor coming to rest) would be dropped and the picture would
+    /// stay stale until the next change.
+    private var stale: EncodedFrame?
+
     func send(_ frame: EncodedFrame) {
         stateLock.lock()
-        guard isOpen, case .done = handshake, inFlight < 2 else {
+        guard isOpen, case .done = handshake else {
             stateLock.unlock()
             return
         }
+        guard inFlight < 2 else {
+            stale = frame
+            stateLock.unlock()
+            return
+        }
+        stale = nil
         inFlight += 1
         stateLock.unlock()
+        write(frame)
+    }
 
+    private func write(_ frame: EncodedFrame) {
         connection.send(content: RawProtocol.framePacket(frame.data),
                         completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             self.stateLock.lock()
             self.inFlight -= 1
+            let next = self.isOpen && self.inFlight < 2 ? self.stale : nil
+            if next != nil {
+                self.stale = nil
+                self.inFlight += 1
+            }
             self.stateLock.unlock()
             if error != nil { self.close() }
+            else if let next { self.write(next) }
         })
     }
 

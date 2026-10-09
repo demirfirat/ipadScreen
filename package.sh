@@ -15,8 +15,14 @@ ADHOC=0
 
 VERSION="1.0.0"
 APP="build/iPadScreen.app"
-ARM=".build/arm64-apple-macosx/release/ipadscreen"
-X86=".build/x86_64-apple-macosx/release/ipadscreen"
+# Where SwiftPM puts the product depends on the toolchain version, so ask it
+# instead of hardcoding .build/<triple>/release. Newer toolchains write every
+# triple to the same directory, so each binary is copied out right after its
+# build, before the next one overwrites it.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+ARM="$STAGE/arm64"
+X86="$STAGE/x86_64"
 
 echo ""
 echo "  Packaging iPadScreen.app $VERSION…"
@@ -29,9 +35,11 @@ FLAGS=(-c release -Xswiftc -file-prefix-map -Xswiftc "$PWD=.")
 
 echo "  → building arm64…"
 swift build "${FLAGS[@]}" --triple arm64-apple-macosx14.0 >/dev/null
+cp "$(swift build "${FLAGS[@]}" --triple arm64-apple-macosx14.0 --show-bin-path)/ipadscreen" "$ARM"
 
 echo "  → building x86_64…"
 swift build "${FLAGS[@]}" --triple x86_64-apple-macosx14.0 >/dev/null
+cp "$(swift build "${FLAGS[@]}" --triple x86_64-apple-macosx14.0 --show-bin-path)/ipadscreen" "$X86"
 
 # --- Bundle ----------------------------------------------------------------
 rm -rf "$APP"

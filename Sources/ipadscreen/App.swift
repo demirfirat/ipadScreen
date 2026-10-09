@@ -265,15 +265,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var retryTask: Task<Void, Never>?
+
     private func startEngine() async {
+        retryTask?.cancel()
         do {
-            if state.availableDisplays.isEmpty {
-                try await engine.loadDisplays()
-            }
+            // Always reload: the virtual display may have been created
+            // after launch, and a stale list would never contain it.
+            try await engine.loadDisplays()
             try await engine.start()
         } catch {
             state.statusText = error.localizedDescription
             Log.error(error.localizedDescription)
+            if case EngineError.noDisplay = error { retryWhenDisplayAppears() }
+        }
+    }
+
+    /// Checks every few seconds so streaming starts by itself as soon as
+    /// the virtual display exists, without the user pressing Start again.
+    private func retryWhenDisplayAppears() {
+        retryTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let self, !Task.isCancelled, !self.state.isRunning else { return }
+                if (try? await self.engine.loadDisplays()) != nil,
+                   (try? await self.engine.start()) != nil { return }
+            }
         }
     }
 

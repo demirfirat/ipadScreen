@@ -138,6 +138,10 @@ final class USBSender: FrameSink {
         onControl?(line)
     }
 
+    /// Newest frame that arrived while the queue was full; sent when a slot
+    /// frees up so the last frame of a burst is never lost.
+    private var stale: EncodedFrame?
+
     func send(_ frame: EncodedFrame) {
         lock.lock()
         // Keep the queue shallow. USB has bandwidth to spare, but the
@@ -145,19 +149,34 @@ final class USBSender: FrameSink {
         // frames the device can't keep up with, turning them into latency
         // and a spike in dropped frames. Three frames keeps the decoder fed
         // while bounding latency.
-        guard isOpen, sentHeader, confirmed, inFlight < 3 else {
+        guard isOpen, sentHeader, confirmed else {
             lock.unlock()
             return
         }
+        guard inFlight < 3 else {
+            stale = frame
+            lock.unlock()
+            return
+        }
+        stale = nil
         inFlight += 1
         lock.unlock()
+        write(frame)
+    }
 
+    private func write(_ frame: EncodedFrame) {
         connection.send(content: RawProtocol.framePacket(frame.data),
                         completion: .contentProcessed { [self] error in
             lock.lock()
             inFlight -= 1
+            let next = isOpen && inFlight < 3 ? stale : nil
+            if next != nil {
+                stale = nil
+                inFlight += 1
+            }
             lock.unlock()
             if error != nil { close() }
+            else if let next { write(next) }
         })
     }
 

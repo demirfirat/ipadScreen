@@ -29,6 +29,10 @@ Short version:
 cd ios && make package  # iPad app → ios/packages/*.deb (needs theos + iOS 6.1 SDK)
 ```
 
+After a toolchain update, check that the build you install is actually new
+(look at the file's timestamp) and, for the iPad app, that it still launches
+on a device; see the crash note in the README's iPad section.
+
 ## Code guidelines
 
 - Match the surrounding code: naming, comment density, structure.
