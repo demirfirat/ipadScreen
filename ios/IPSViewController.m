@@ -50,6 +50,16 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     CALayer *_screenLayer;
     CADisplayLink *_displayLink;
 
+    // The Mac's mouse cursor, drawn here as its own layer instead of inside
+    // the video, so it stays smooth while frames are late. Position is
+    // normalized to the picture (0-10000); -1 means the pointer is off the
+    // mirrored display.
+    CALayer *_cursorLayer;
+    BOOL _cursorOverlay;        // the Mac is sending cursor messages
+    int _cursorX, _cursorY;
+    int _cursorHotX, _cursorHotY, _cursorPixelsW, _cursorPixelsH;
+    BOOL _cursorMoved;          // position changed since the last tick
+
     UILabel *_statusLabel;
 
     // Sequence of the last frame put on screen; stops us re-uploading the
@@ -159,6 +169,14 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     _screenLayer.backgroundColor = [UIColor blackColor].CGColor;
     [self.view.layer addSublayer:_screenLayer];
 
+    _cursorLayer = [[CALayer alloc] init];
+    _cursorLayer.anchorPoint = CGPointZero;          // positioned by its top-left corner
+    _cursorLayer.contentsScale = 1.0;
+    _cursorLayer.contentsGravity = kCAGravityResize;
+    _cursorLayer.hidden = YES;
+    _cursorX = _cursorY = -1;                         // no position yet
+    [self.view.layer addSublayer:_cursorLayer];
+
     _statusLabel = [[UILabel alloc] initWithFrame:bounds];
     _statusLabel.backgroundColor = [UIColor clearColor];
     _statusLabel.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
@@ -251,6 +269,7 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     }
 
     [self updateCodePrompt];
+    [self applyCursor];
 
     if (_modePending && CFAbsoluteTimeGetCurrent() - _lastModeSend > 2.0) {
         [self sendModeToMac];
@@ -282,6 +301,101 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     [self updateStatsIfNeeded];
 }
 
+#pragma mark - Cursor overlay
+
+/// Decodes standard base64 (no line breaks). iOS 6 has no built-in API for
+/// it; NSData's base64 methods arrived in iOS 7.
+static NSData *IPSDataFromBase64(const char *s, size_t len) {
+    static int8_t table[256];
+    static BOOL ready = NO;
+    if (!ready) {
+        memset(table, -1, sizeof(table));
+        const char *alphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; i++) table[(uint8_t)alphabet[i]] = (int8_t)i;
+        ready = YES;
+    }
+    NSMutableData *out = [NSMutableData dataWithCapacity:len * 3 / 4];
+    uint32_t acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '=') break;
+        int8_t v = table[(uint8_t)s[i]];
+        if (v < 0) return nil;
+        acc = (acc << 6) | (uint32_t)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            uint8_t byte = (uint8_t)((acc >> bits) & 0xFF);
+            [out appendBytes:&byte length:1];
+        }
+    }
+    return out;
+}
+
+/// "cursor=<x>,<y>", "cursor=off" or "cursorimg=<hx>,<hy>,<w>,<h>,<base64 png>".
+/// Only stores state; `applyCursor` moves the layer once per screen refresh,
+/// so a burst of position messages costs one layer update.
+- (void)handleCursorMessage:(NSString *)message {
+    const char *c = [message UTF8String];
+
+    if (strcmp(c, "cursor=off") == 0) {
+        _cursorOverlay = NO;
+        _cursorLayer.hidden = YES;
+        return;
+    }
+
+    int x, y;
+    if (sscanf(c, "cursor=%d,%d", &x, &y) == 2) {
+        _cursorX = x;
+        _cursorY = y;
+        _cursorMoved = YES;
+        return;
+    }
+
+    int hx, hy, w, h, consumed = 0;
+    if (sscanf(c, "cursorimg=%d,%d,%d,%d,%n", &hx, &hy, &w, &h, &consumed) == 4
+        && consumed > 0 && w > 0 && h > 0 && w <= 256 && h <= 256) {
+        const char *b64 = c + consumed;
+        NSData *png = IPSDataFromBase64(b64, strlen(b64));
+        UIImage *image = png ? [UIImage imageWithData:png] : nil;
+        if (!image) return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        _cursorLayer.contents = (id)image.CGImage;
+        [CATransaction commit];
+        _cursorHotX = hx; _cursorHotY = hy;
+        _cursorPixelsW = w; _cursorPixelsH = h;
+        _cursorOverlay = YES;
+        _cursorMoved = YES;
+    }
+}
+
+/// Puts the cursor layer where the Mac's pointer is. The picture's on-screen
+/// rectangle is `_screenLayer.frame`, and the cursor image is sized in
+/// stream pixels, so one scale factor maps both.
+- (void)applyCursor {
+    if (!_cursorOverlay || !_cursorMoved) return;
+    _cursorMoved = NO;
+
+    NSUInteger fw = _client.frameWidth;
+    if (fw == 0 || _screenLayer.contents == nil) return;
+
+    BOOL visible = (_cursorX >= 0 && _cursorY >= 0);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _cursorLayer.hidden = !visible;
+    if (visible) {
+        CGRect picture = _screenLayer.frame;
+        CGFloat scale = picture.size.width / (CGFloat)fw;
+        CGFloat px = picture.origin.x + (_cursorX / 10000.0) * picture.size.width;
+        CGFloat py = picture.origin.y + (_cursorY / 10000.0) * picture.size.height;
+        _cursorLayer.bounds = CGRectMake(0, 0, _cursorPixelsW * scale, _cursorPixelsH * scale);
+        _cursorLayer.position = CGPointMake(px - _cursorHotX * scale, py - _cursorHotY * scale);
+    }
+    [CATransaction commit];
+}
+
 /// Places the picture on screen without distorting its aspect ratio.
 - (void)layoutScreenLayer {
     NSUInteger fw = _client.frameWidth;
@@ -299,6 +413,7 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     _screenLayer.frame = CGRectMake((bounds.size.width - w) / 2,
                                     (bounds.size.height - h) / 2, w, h);
     [CATransaction commit];
+    _cursorMoved = YES;        // the picture moved; so does the cursor
 }
 
 - (void)updateStatsIfNeeded {
@@ -547,6 +662,7 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     _screenLayer.contents = nil;                 // no stale picture behind the message
+    _cursorLayer.hidden = YES;
     [CATransaction commit];
     _statusLabel.hidden = NO;
     _statusLabel.text = @"Tap to enter the pairing code shown on your Mac.";
@@ -659,6 +775,10 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
 - (void)streamClient:(StreamClient *)client didReceiveControl:(NSString *)message {
     if ([message hasPrefix:@"auth="]) {
         [self handleAuthProblem:message];
+        return;
+    }
+    if ([message hasPrefix:@"cursor"]) {
+        [self handleCursorMessage:message];
         return;
     }
     if (![message hasPrefix:@"mode="]) return;

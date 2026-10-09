@@ -64,6 +64,22 @@ final class StreamServer {
         for client in all { client.sendControl(message) }
     }
 
+    /// Sends a control message to every connected viewer. Browsers ignore it.
+    func broadcastControl(_ message: String) {
+        clientsLock.lock()
+        let all = Array(clients.values)
+        clientsLock.unlock()
+        for client in all { client.sendControl(message) }
+    }
+
+    /// True when the cursor can be drawn on the viewers instead of in the
+    /// video: at least one native client, and no browser, which couldn't
+    /// show it.
+    var cursorOverlayAvailable: Bool {
+        clientsLock.lock(); defer { clientsLock.unlock() }
+        return !clients.isEmpty && !clients.values.contains { $0 is MJPEGClient }
+    }
+
     private func handleControl(_ message: String) {
         if let requested = RawProtocol.mode(from: message) {
             onModeRequest?(requested)

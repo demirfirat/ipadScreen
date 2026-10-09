@@ -10,6 +10,10 @@ struct EncodedFrame {
     let width: Int
     let height: Int
     let sequence: UInt64
+    /// A sharp re-send of a frame that has stopped changing. Not part of
+    /// the live stream, so it must not feed the frame rate or the quality
+    /// controller.
+    var isRefinement = false
 }
 
 /// Captures a display with ScreenCaptureKit, encodes JPEG, and hands frames
@@ -26,6 +30,14 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private var sequence: UInt64 = 0
     private let quality = QualityController()
+
+    /// Quality of the sharp frame sent once the picture holds still. The
+    /// live stream stays low for speed; a single frame can afford more
+    /// because the iPad decodes it while nothing else is arriving.
+    private let refineQuality = 0.85
+    private let refineDelay: TimeInterval = 0.25
+    private var lastPixelBuffer: CVPixelBuffer?
+    private var refineWork: DispatchWorkItem?
 
     /// Called for every frame. Fan-out to multiple clients is done by
     /// `StreamServer.broadcast`.
@@ -83,8 +95,8 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         config.height = displayHeight
         config.minimumFrameInterval = activeFrameInterval
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.showsCursor = true
-        config.queueDepth = 3
+        config.showsCursor = showsCursor
+        config.queueDepth = 4
         config.scalesToFit = true
 
         // No window exclusion: everything on the mirrored display should show.
@@ -102,6 +114,10 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         guard let stream else { return }
         try? await stream.stopCapture()
         self.stream = nil
+        outputQueue.async { [self] in
+            refineWork?.cancel()
+            lastPixelBuffer = nil
+        }
     }
 
     /// Changes the scale. The resolution changes, so the stream has to be
@@ -144,12 +160,24 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         config.height = displayHeight
         config.minimumFrameInterval = activeFrameInterval
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.showsCursor = true
-        config.queueDepth = 3
+        config.showsCursor = showsCursor
+        config.queueDepth = 4
         config.scalesToFit = true
         return config
     }
     private var activeFrameInterval = CMTime(value: 1, timescale: 45)
+
+    /// Whether the pointer is drawn into the video. Off while the iPad
+    /// draws it itself; see `CursorStream`.
+    private var showsCursor = true
+
+    func setShowsCursor(_ shows: Bool) async {
+        guard shows != showsCursor else { return }
+        showsCursor = shows
+        guard let stream else { return }
+        try? await stream.updateConfiguration(currentConfiguration)
+        Log.debug("Cursor in video: \(shows)")
+    }
 
     /// Relaxes the quality thresholds for deeper-queued links such as USB.
     func useDeepQueueThresholds(_ deep: Bool) {
@@ -185,6 +213,33 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
                               width: displayWidth,
                               height: displayHeight,
                               sequence: sequence))
+
+        scheduleRefinement(of: pixelBuffer)
+    }
+
+    /// Screen capture only delivers frames when something changes, so a
+    /// frame that goes unreplaced for `refineDelay` is the final picture.
+    /// Re-encode it sharply. Runs on `outputQueue`, like the frame callback,
+    /// so no locking is needed.
+    private func scheduleRefinement(of pixelBuffer: CVPixelBuffer) {
+        refineWork?.cancel()
+        // Already at or above the refine quality (manual setting): nothing
+        // to gain.
+        guard quality.currentQuality < refineQuality else { return }
+
+        lastPixelBuffer = pixelBuffer
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let buffer = self.lastPixelBuffer,
+                  let jpeg = self.encodeJPEG(buffer, quality: self.refineQuality) else { return }
+            self.lastPixelBuffer = nil
+            self.sequence &+= 1
+            var frame = EncodedFrame(data: jpeg, width: self.displayWidth,
+                                     height: self.displayHeight, sequence: self.sequence)
+            frame.isRefinement = true
+            self.onFrame?(frame)
+        }
+        refineWork = work
+        outputQueue.asyncAfter(deadline: .now() + refineDelay, execute: work)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -195,14 +250,15 @@ final class ScreenCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: - Encode
 
-    private func encodeJPEG(_ pixelBuffer: CVPixelBuffer) -> Data? {
+    private func encodeJPEG(_ pixelBuffer: CVPixelBuffer,
+                            quality override: Double? = nil) -> Data? {
         let image = CIImage(cvPixelBuffer: pixelBuffer)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         return ciContext.jpegRepresentation(
             of: image,
             colorSpace: colorSpace,
             options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption:
-                        quality.currentQuality])
+                        override ?? quality.currentQuality])
     }
 }
 

@@ -11,6 +11,7 @@ final class Engine {
 
     private var server: StreamServer?
     private var capture: ScreenCaptureEngine?
+    private var cursorStream: CursorStream?
     private var iproxy: Process?
     private var healthTimer: Timer?
 
@@ -100,7 +101,9 @@ final class Engine {
         capture.onFrame = { [weak server, weak capture] frame in
             guard let server, let capture else { return }
             server.broadcast(frame)
-            capture.reportBacklog(server.maxPendingWrites)
+            // A refinement is one large frame; judging congestion by it
+            // would needlessly push the live quality down.
+            if !frame.isRefinement { capture.reportBacklog(server.maxPendingWrites) }
         }
 
         server.onClientCountChanged = { [weak self] count in
@@ -126,6 +129,16 @@ final class Engine {
         self.server = server
         self.capture = capture
 
+        let cursor = CursorStream(
+            displayID: display.displayID, frameWidth: width,
+            isActive: { [weak server] in server?.cursorOverlayAvailable ?? false },
+            onActiveChanged: { [weak capture] active in
+                Task { await capture?.setShowsCursor(!active) }
+            },
+            send: { [weak server] in server?.broadcastControl($0) })
+        cursor.start()
+        cursorStream = cursor
+
         if linkMode == .usb {
             capture.useDeepQueueThresholds(true)
             startUSBTunnel(server: server)
@@ -147,6 +160,8 @@ final class Engine {
         healthTimer?.invalidate()
         healthTimer = nil
 
+        cursorStream?.stop()
+        cursorStream = nil
         await capture?.stop()
         server?.stop()
         iproxy?.terminate()
