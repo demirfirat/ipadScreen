@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 ADHOC=0
 [ "$1" = "--adhoc" ] && ADHOC=1
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 APP="build/iPadScreen.app"
 # Where SwiftPM puts the product depends on the toolchain version, so ask it
 # instead of hardcoding .build/<triple>/release. Newer toolchains write every

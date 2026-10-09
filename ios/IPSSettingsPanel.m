@@ -162,6 +162,24 @@ static const NSTimeInterval kSlideDuration = 0.28;
     [swipe release];
 }
 
+#pragma mark - Per-version tweaks
+
+/// The panel is drawn by hand, so it looks the same on every iOS version.
+/// The few differences left come from system parts: the system font's
+/// widths (Helvetica on iOS 6, San Francisco from iOS 9) and how
+/// UISegmentedControl draws itself from iOS 7 on. Everything below leaves
+/// iOS 6 exactly as it was.
+static BOOL IPSIsIOS7OrLater(void) {
+    return [[[UIDevice currentDevice] systemVersion] floatValue] >= 7.0f;
+}
+
+/// Shrinks a fixed-width label's text to fit rather than clipping it. Only
+/// kicks in when the text is too wide, so nothing changes when it fits.
+static void IPSShrinkToFit(UILabel *label) {
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.75f;      // iOS 6.0+
+}
+
 #pragma mark - Rows
 
 - (CGFloat)addTitle:(NSString *)text atY:(CGFloat)y {
@@ -185,6 +203,16 @@ static const NSTimeInterval kSlideDuration = 0.28;
     _modeControl.segmentedControlStyle = UISegmentedControlStyleBar;
     _modeControl.tintColor = [UIColor colorWithRed:0.04 green:0.52 blue:1.0 alpha:1.0];
     _modeControl.selectedSegmentIndex = 1;
+    if (IPSIsIOS7OrLater()) {
+        // From iOS 7 the control is flat and ignores the bar style; make
+        // sure titles stay readable on the dark panel.
+        NSDictionary *normal = [NSDictionary dictionaryWithObject:[UIColor colorWithWhite:1.0 alpha:0.85]
+                                                          forKey:UITextAttributeTextColor];
+        NSDictionary *selected = [NSDictionary dictionaryWithObject:[UIColor whiteColor]
+                                                            forKey:UITextAttributeTextColor];
+        [_modeControl setTitleTextAttributes:normal forState:UIControlStateNormal];
+        [_modeControl setTitleTextAttributes:selected forState:UIControlStateSelected];
+    }
     [_modeControl addTarget:self action:@selector(modeChanged)
            forControlEvents:UIControlEventValueChanged];
     [_sheet addSubview:_modeControl];
@@ -198,6 +226,7 @@ static const NSTimeInterval kSlideDuration = 0.28;
 
     UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 120, kRowHeight)];
     name.text = @"Status";
+    IPSShrinkToFit(name);
     name.font = [UIFont systemFontOfSize:15];
     name.textColor = [UIColor whiteColor];
     name.backgroundColor = [UIColor clearColor];
@@ -213,6 +242,7 @@ static const NSTimeInterval kSlideDuration = 0.28;
     _statusValue.textColor = [UIColor colorWithRed:0.30 green:0.78 blue:0.47 alpha:1.0];
     _statusValue.textAlignment = UITextAlignmentRight;
     _statusValue.backgroundColor = [UIColor clearColor];
+    IPSShrinkToFit(_statusValue);
     [card addSubview:_statusValue];
     [_statusValue release];
 
@@ -252,6 +282,7 @@ static const NSTimeInterval kSlideDuration = 0.28;
 
     UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(x, 34, w, 14)];
     label.text = caption;
+    IPSShrinkToFit(label);
     label.font = [UIFont systemFontOfSize:10];
     label.textColor = [UIColor colorWithWhite:1.0 alpha:0.45];
     label.textAlignment = UITextAlignmentCenter;
@@ -267,6 +298,7 @@ static const NSTimeInterval kSlideDuration = 0.28;
 
     UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(14, 0, 90, kRowHeight)];
     name.text = @"Address";
+    IPSShrinkToFit(name);
     name.font = [UIFont systemFontOfSize:15];
     name.textColor = [UIColor whiteColor];
     name.backgroundColor = [UIColor clearColor];
