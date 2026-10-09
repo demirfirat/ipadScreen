@@ -47,8 +47,8 @@ commands. Each step ends with how to check it worked.
 3. **Mac app.**
 
    ```bash
-   curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.0-macOS.zip
-   ditto -x -k iPadScreen-1.0.0-macOS.zip /Applications
+   curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.1-macOS.zip
+   ditto -x -k iPadScreen-1.0.1-macOS.zip /Applications
    open /Applications/iPadScreen.app
    ```
 
@@ -72,10 +72,10 @@ commands. Each step ends with how to check it worked.
 
    ```bash
    IPAD=192.168.1.50                 # your iPad's IP
-   curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.0-iOS.deb
-   scp -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa iPadScreen-1.0.0-iOS.deb root@$IPAD:/tmp/
+   curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.1-iOS.deb
+   scp -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa iPadScreen-1.0.1-iOS.deb root@$IPAD:/tmp/
    ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa root@$IPAD \
-     'dpkg -i /tmp/iPadScreen-1.0.0-iOS.deb && su mobile -c uicache'
+     'dpkg -i /tmp/iPadScreen-1.0.1-iOS.deb && su mobile -c uicache'
    ```
 
    The `-o` options are needed because iOS's old OpenSSH only offers
