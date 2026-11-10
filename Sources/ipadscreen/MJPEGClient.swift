@@ -21,6 +21,8 @@ final class MJPEGClient: FrameSink {
 
     /// Frames currently being sent. Keeps a slow client from piling up frames.
     private var inFlight = 0
+    /// Frames skipped because both slots were busy.
+    private var dropped: UInt64 = 0
 
     var onClose: ((Int) -> Void)?
 
@@ -72,6 +74,7 @@ final class MJPEGClient: FrameSink {
         // latency: stale frames get shown instead of being skipped. Two
         // frames is ~33 ms, below what's noticeable.
         guard isOpen, inFlight < 2 else {
+            dropped &+= 1
             stateLock.unlock()
             return
         }
@@ -101,6 +104,11 @@ final class MJPEGClient: FrameSink {
     var pendingWrites: Int {
         stateLock.lock(); defer { stateLock.unlock() }
         return inFlight
+    }
+
+    var droppedFrames: UInt64 {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return dropped
     }
 
     func close() {

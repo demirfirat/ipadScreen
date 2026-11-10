@@ -10,11 +10,16 @@ protocol FrameSink: AnyObject {
     /// browser stream ignores them.
     func sendControl(_ message: String)
     var pendingWrites: Int { get }
+    /// Frames this client had to skip because it couldn't send them. The
+    /// quality controller watches the increase: an empty send queue only
+    /// means "keeping up" if nothing is being thrown away.
+    var droppedFrames: UInt64 { get }
     func close()
 }
 
 extension FrameSink {
     func sendControl(_ message: String) {}
+    var droppedFrames: UInt64 { 0 }
 }
 
 /// HTTP server for the viewer page and both stream types, plus the USB
@@ -52,6 +57,13 @@ final class StreamServer {
     /// calls `setMode`, which tells every native client.
     var onModeRequest: ((LinkMode) -> Void)?
 
+    /// A touch on the iPad, as "touch=down,5000,5000". The engine turns it
+    /// into a mouse event; see `TouchInput`.
+    var onTouch: ((String) -> Void)?
+
+    /// The iPad's own decode measurements, once a second; see `ClientStats`.
+    var onStats: ((ClientStats) -> Void)?
+
     /// Changes the mode and tells every native client, so the iPad's
     /// selection follows the Mac's.
     func setMode(_ newMode: LinkMode) {
@@ -83,7 +95,13 @@ final class StreamServer {
     private func handleControl(_ message: String) {
         if let requested = RawProtocol.mode(from: message) {
             onModeRequest?(requested)
+            return
         }
+        if let stats = ClientStats.parse(message) {
+            onStats?(stats)
+            return
+        }
+        if message.hasPrefix("touch=") { onTouch?(message) }
     }
 
     // MARK: - USB
@@ -300,6 +318,12 @@ final class StreamServer {
     var maxPendingWrites: Int {
         clientsLock.lock(); defer { clientsLock.unlock() }
         return clients.values.map(\.pendingWrites).max() ?? 0
+    }
+
+    /// Frames the clients have skipped so far. Only the growth matters.
+    var droppedFrames: UInt64 {
+        clientsLock.lock(); defer { clientsLock.unlock() }
+        return clients.values.reduce(0) { $0 &+ $1.droppedFrames }
     }
 
     var clientCount: Int {

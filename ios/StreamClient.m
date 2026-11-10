@@ -64,6 +64,16 @@ static const uint32_t kControlFlag = 0x80000000u;
     // Each decode queue has its own decoder: the libjpeg context and buffer
     // pool aren't shared, so there's nothing to contend on.
     TurboDecoder *_decoders[2];
+
+    // At most one frame waiting per decode queue, plus whether that queue is
+    // busy. A frame that arrives while its queue is busy replaces the one
+    // waiting rather than joining a queue of them: on a remote display a
+    // backlog of old frames is what makes the picture drift behind the
+    // cursor, which is drawn locally and always current.
+    NSData *_pendingData[2];
+    uint64_t _pendingSequence[2];
+    BOOL _pendingBusy[2];
+    NSLock *_pendingLock;
 }
 
 @synthesize delegate = _delegate;
@@ -91,6 +101,7 @@ static const uint32_t kControlFlag = 0x80000000u;
         _listenFD = -1;
         _buffer = [[NSMutableData alloc] initWithCapacity:512 * 1024];
         _frameLock = [[NSLock alloc] init];
+        _pendingLock = [[NSLock alloc] init];
 
         _netQueue = dispatch_queue_create("ipadscreen.net", DISPATCH_QUEUE_SERIAL);
         _decodeQueues[0] = dispatch_queue_create("ipadscreen.decode0", DISPATCH_QUEUE_SERIAL);
@@ -117,6 +128,7 @@ static const uint32_t kControlFlag = 0x80000000u;
     [_clientNonce release];
     [_buffer release];
     [_frameLock release];
+    [_pendingLock release];
     if (_netQueue) dispatch_release(_netQueue);
     if (_decodeQueues[0]) dispatch_release(_decodeQueues[0]);
     if (_decodeQueues[1]) dispatch_release(_decodeQueues[1]);
@@ -148,6 +160,17 @@ static const uint32_t kControlFlag = 0x80000000u;
         dispatch_release(_readSource);
         _readSource = NULL;
     }
+
+    // Frames still waiting to be decoded belong to the old connection.
+    [_pendingLock lock];
+    for (int i = 0; i < 2; i++) {
+        if (_pendingData[i]) {
+            [_pendingData[i] release];
+            _pendingData[i] = nil;
+        }
+    }
+    [_pendingLock unlock];
+
     _connected = NO;
 }
 
@@ -220,7 +243,13 @@ static const uint32_t kControlFlag = 0x80000000u;
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    int rcvbuf = 512 * 1024;
+    // Small receive buffer on purpose. Frames and cursor messages share one
+    // TCP stream, so every byte sitting in this buffer delays the next cursor
+    // message by exactly that many bytes of frame data. 512 KB held several
+    // frames, which is what made the pointer trail the Mac by a third of a
+    // second while frames were being dropped anyway. A window this size still
+    // carries the link (it is rate × round-trip) but bounds that delay.
+    int rcvbuf = 128 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
     [self beginReadingOnSocket:fd];
@@ -266,7 +295,9 @@ static const uint32_t kControlFlag = 0x80000000u;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
 
-    int rcvbuf = 512 * 1024;
+    // See configureAndBegin: a small receive buffer bounds how far a cursor
+    // message can queue behind frame bytes.
+    int rcvbuf = 128 * 1024;
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
     if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
@@ -554,19 +585,54 @@ static const uint32_t kControlFlag = 0x80000000u;
 #pragma mark - Decoding
 
 - (void)decodeAsync:(NSData *)jpeg sequence:(uint64_t)seq {
-    NSData *retained = [jpeg retain];
     NSUInteger slot = _decodeTurn % 2;
-    dispatch_queue_t q = _decodeQueues[slot];
-    TurboDecoder *decoder = _decoders[slot];
     _decodeTurn++;
 
-    dispatch_async(q, ^{
-        uint64_t t0 = mach_absolute_time();
-        CGImageRef img = [decoder decode:retained];
-        uint64_t t1 = mach_absolute_time();
-        [retained release];
+    // Only the newest frame is worth decoding: if the queue is still busy,
+    // the frame waiting for it is older than this one and gets dropped.
+    [_pendingLock lock];
+    if (_pendingData[slot]) {
+        [_pendingData[slot] release];
+        _pendingData[slot] = nil;
+        _framesDropped++;
+    }
+    _pendingData[slot] = [jpeg retain];
+    _pendingSequence[slot] = seq;
+    BOOL busy = _pendingBusy[slot];
+    _pendingBusy[slot] = YES;
+    [_pendingLock unlock];
 
-        if (!img) return;
+    if (busy) return;
+    dispatch_async(_decodeQueues[slot], ^{
+        [self drainDecodeSlot:slot];
+    });
+}
+
+/// Decodes whatever is waiting for `slot` until nothing is left.
+///
+/// Constantly picking up the newest waiting frame keeps a slow decoder from
+/// turning into a queue of old ones, so being behind costs frames rather than
+/// making the picture lag further behind the cursor.
+- (void)drainDecodeSlot:(NSUInteger)slot {
+    TurboDecoder *decoder = _decoders[slot];
+    for (;;) {
+        [_pendingLock lock];
+        NSData *data = _pendingData[slot];      // take ownership
+        uint64_t seq = _pendingSequence[slot];
+        _pendingData[slot] = nil;
+        if (!data) {
+            _pendingBusy[slot] = NO;
+            [_pendingLock unlock];
+            return;
+        }
+        [_pendingLock unlock];
+
+        uint64_t t0 = mach_absolute_time();
+        CGImageRef img = [decoder decode:data];
+        uint64_t t1 = mach_absolute_time();
+        [data release];
+
+        if (!img) continue;
 
         double ms = (double)(t1 - t0) * _timebaseMS;
         _lastDecodeMS = ms;
@@ -582,12 +648,12 @@ static const uint32_t kControlFlag = 0x80000000u;
             _displayedSequence = seq;
             _framesDecoded++;
         } else {
-            // The two queues finished out of order; drop the older frame.
+            // The other queue finished a newer frame first.
             CGImageRelease(img);
             _framesDropped++;
         }
         [_frameLock unlock];
-    });
+    }
 }
 
 - (CGImageRef)copyLatestFrame:(uint64_t *)sequence {

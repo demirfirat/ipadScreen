@@ -142,18 +142,24 @@ final class USBSender: FrameSink {
     /// frees up so the last frame of a burst is never lost.
     private var stale: EncodedFrame?
 
+    /// Frames skipped because the write queue was full.
+    private var dropped: UInt64 = 0
+
     func send(_ frame: EncodedFrame) {
         lock.lock()
         // Keep the queue shallow. USB has bandwidth to spare, but the
         // bottleneck is the iPad's decode speed: a deep queue piles up
         // frames the device can't keep up with, turning them into latency
-        // and a spike in dropped frames. Three frames keeps the decoder fed
-        // while bounding latency.
+        // and a spike in dropped frames. One frame on the wire and the newest
+        // one waiting keeps the decoder busy without the pointer, which
+        // shares this connection, trailing behind queued frames.
         guard isOpen, sentHeader, confirmed else {
             lock.unlock()
             return
         }
-        guard inFlight < 3 else {
+        guard inFlight < 2 else {
+            // A frame already waiting is about to be replaced by this one.
+            if stale != nil { dropped &+= 1 }
             stale = frame
             lock.unlock()
             return
@@ -169,7 +175,7 @@ final class USBSender: FrameSink {
                         completion: .contentProcessed { [self] error in
             lock.lock()
             inFlight -= 1
-            let next = isOpen && inFlight < 3 ? stale : nil
+            let next = isOpen && inFlight < 2 ? stale : nil
             if next != nil {
                 stale = nil
                 inFlight += 1
@@ -192,6 +198,11 @@ final class USBSender: FrameSink {
     var pendingWrites: Int {
         lock.lock(); defer { lock.unlock() }
         return inFlight
+    }
+
+    var droppedFrames: UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return dropped
     }
 
     /// Closes exactly once. A one-shot flag is used because checking the

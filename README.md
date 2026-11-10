@@ -31,20 +31,12 @@ commands. Each step ends with how to check it worked.
 
    ```bash
    xcode-select --install            # skip if already installed
-   brew install --cask betterdisplay
    brew install libimobiledevice     # provides iproxy, for USB mode
    ```
 
    Check: `which iproxy` prints a path.
 
-2. **Virtual display (manual).** Open BetterDisplay, create a new virtual
-   screen with a **4:3** aspect ratio, turn on **Connect this virtual
-   screen**, and in System Settings › Displays set it to **Extended display**
-   (not mirroring). See [Virtual display](#virtual-display).
-
-   Check: System Settings › Displays lists it as a separate display.
-
-3. **Mac app.**
+2. **Mac app.**
 
    ```bash
    curl -LO https://github.com/demirfirat/ipadScreen/releases/latest/download/iPadScreen-1.0.2-macOS.zip
@@ -55,6 +47,13 @@ commands. Each step ends with how to check it worked.
    The app isn't notarized. `curl` downloads aren't quarantined, so it opens
    directly; if you downloaded it with a browser and macOS blocks it, open
    System Settings › Privacy & Security and click **Open Anyway**.
+
+3. **Virtual display.** Nothing to install: on **Start** the app creates a
+   virtual display of its own, sized to the iPad it detects (see
+   [Virtual display](#virtual-display)).
+
+   Check: after pressing **Start** in the next step, System Settings ›
+   Displays lists **iPadScreen** as a separate display.
 
 4. **Screen Recording permission (manual).** Press **Start** in the app,
    allow iPadScreen in System Settings › Privacy & Security › Screen
@@ -118,10 +117,12 @@ Past that point the bottleneck is decode speed, not bandwidth.
   (`xcode-select --install`)
 - macOS 14 or later, Intel or Apple Silicon (universal binary). Tested on
   an M1 Mac mini with macOS 26; older Intel Macs may encode more slowly.
-- [BetterDisplay](https://betterdisplay.pro) to create the virtual display
-  (`brew install --cask betterdisplay`). Creating a virtual screen is part of
-  the free version.
-- For USB mode: `brew install libimobiledevice`
+- No extra app for the virtual display: the app creates one itself, sized to
+  the iPad it detects. macOS has no public API for that, so it uses the same
+  private CoreGraphics classes BetterDisplay does; see
+  [Virtual display](#virtual-display).
+- For USB mode, and for detecting the iPad's model over the cable:
+  `brew install libimobiledevice`
 
 **iPad**
 
@@ -180,12 +181,30 @@ Arguments passed on the command line are saved to the app's settings.
 
 ## Virtual display
 
-In BetterDisplay create a new virtual screen with a **4:3** aspect ratio
-(the iPad 2 panel is 1024×768), turn on **Connect this virtual screen**, and
-set it to **Extended display** in System Settings › Displays, not mirroring.
+The app makes its own virtual display, so BetterDisplay or a similar tool is
+not needed. On **Start** it asks libimobiledevice for the attached iPad's
+model and creates a display the size of that iPad's screen: 1024×768 for an
+iPad 2, 1366×1024 for a 12.9-inch Pro, and so on. With no iPad attached it
+uses the model it saw last time, or falls back to an iPad 2's panel.
 
-The app picks the virtual display automatically. Lower resolutions make
-everything on the iPad larger and also decode faster.
+Worth knowing:
+
+- A virtual display that already exists — this app's from an earlier run, or
+  BetterDisplay's — is reused instead of creating a second one. Picking a
+  display yourself in the app also stops it from creating one.
+- The display is called **iPadScreen** and goes away when mirroring stops or
+  the app quits. It is placed beside your main screen, top edges aligned, on
+  whichever side **Virtual display side** is set to (right by default);
+  changing that moves the display straight away. Drag it elsewhere and it
+  stays there until you next stop mirroring.
+- Creating a display has no public API on macOS. This uses the private
+  CoreGraphics `CGVirtualDisplay` classes, the same ones BetterDisplay,
+  DeskPad and Chromium's tests use. They have shipped since macOS 10.13 and
+  work on macOS 26, but Apple can change them at any time — which is why the
+  app also lets you pick a display, and why it can't go on the Mac App Store.
+- Lower resolutions make everything on the iPad larger and also decode
+  faster; the resolution scale slider changes that without resizing the
+  display.
 
 ## iPad app
 
@@ -250,9 +269,61 @@ iOS 6's dyld doesn't understand. The Makefile avoids this by linking with
 `ld-classic` from the Command Line Tools (found with `xcrun -f ld-classic`).
 If your toolchain has no `ld-classic`, install a `.deb` from the
 [releases page](https://github.com/demirfirat/ipadScreen/releases) or build
-with an older Command Line Tools / Xcode. You can check a build with
+with an older Command Line Tools / Xcode. **Xcode 27 has no `ld-classic` at
+all** — ld64 was removed and `-ld_classic` is parsed and ignored — so a build
+on that toolchain cannot run on iOS 6 no matter what flags are passed. The
+Makefile checks the linked binary and stops with an error instead of producing
+a package that crashes on launch. You can check a build yourself with
 `otool -l IPadScreen | grep picsymbolstub`: it should say `__picsymbolstub4`.
 Crash logs are in `/var/mobile/Library/Logs/CrashReporter/` on the iPad.
+
+### Using Xcode 15 next to a newer Xcode
+
+Xcode 15's linker still emits the classic stubs, so it's the simplest way to
+build again without giving up iOS 6. Nothing else about the build changes: the
+`iPhoneOS6.1` SDK, `-fno-objc-arc` and `TARGET := iphone:clang:6.1:6.0` stay
+as they are. The last number of `TARGET` is the deployment target, and 6.0 is
+what keeps the app installable on iOS 6; the linker does not change it.
+
+Install Xcode 15 wherever you like (the `.xip` is a few GB). Newer macOS
+refuses to open it ("not compatible with this version of macOS"), and that
+doesn't matter: only its linker is used, and the linker runs from inside the
+bundle just fine. Don't copy `ld-classic` out of it — it loads
+`@rpath/libtapi.dylib` from its own Xcode install. Point the build at it for
+one command (use whatever the app is actually called):
+
+```bash
+cd ios
+DEVELOPER_DIR="/Applications/Xcode 15.4.app/Contents/Developer" make package
+```
+
+`DEVELOPER_DIR` makes `xcrun -f ld-classic` resolve without changing the
+system-wide `xcode-select`, and it is how the Makefile finds the linker, so it
+has to be set for the build (or select the old Xcode with `xcode-select -s`
+first, then switch back afterwards). Because it never launches Xcode, this
+works even on a macOS that won't open it. To name the linker explicitly:
+
+```bash
+make package LD_CLASSIC="$(DEVELOPER_DIR=/Applications/Xcode\ 15.4.app/Contents/Developer xcrun -f ld-classic)"
+```
+
+Switching linkers needs a clean build: Theos won't relink a binary whose
+sources haven't changed, so an earlier `stub5` link survives and the guard
+reports it even though the right linker is selected. Run `make clean` first
+when you change `LD_CLASSIC` or `DEVELOPER_DIR`.
+
+Check what came out before installing; this one line is the difference between
+an app that opens and one that closes instantly:
+
+```bash
+otool -l .theos/obj/debug/armv7/IPadScreen.app/IPadScreen | grep picsymbolstub
+# __picsymbolstub4  → runs on iOS 6 and 9
+# __picsymbolstub5  → iOS 6/9 dyld cannot run it (the build now fails instead)
+```
+
+If only the Command Line Tools 15 package is installed (much smaller than
+Xcode), the same applies: its `ld-classic` works, and `DEVELOPER_DIR` or an
+explicit `LD_CLASSIC=` is enough to use it.
 
 ### Notes for iOS 6 builds
 
@@ -290,6 +361,14 @@ panel: connection mode, Mac address and live stats. Leave the address empty
 for automatic discovery, or type one in to override it; a typed address is
 remembered across launches.
 
+The iPad's touchscreen controls the Mac: touch the picture and the pointer
+goes there, a tap is a click, and a drag is a drag with the button held
+down. It rides on the same connection as the picture, so it works over USB
+and Wi-Fi alike, but only on the picture itself — the black bars at the
+edges ignore touches. One finger at a time; extra fingers are ignored. The
+Mac needs Accessibility permission for it, and the first touch asks.
+The Safari viewer has no touch support.
+
 ## USB mode
 
 A `usbmuxd` tunnel can only be opened from the Mac to the device, so over USB
@@ -316,9 +395,9 @@ through `iproxy`. The wire format is the same as over Wi-Fi.
   a slot.
 - **The stream isn't encrypted.** Someone who can sniff your Wi-Fi can see
   the frames. Use it on networks you trust, or over USB.
-- **Only a virtual display is picked automatically.** If none is found the
-  app won't start rather than fall back to a physical monitor; you can still
-  pick one yourself.
+- **Only a virtual display is picked automatically.** If one can't be
+  created the app won't fall back to a physical monitor; you can still pick
+  one yourself.
 - **At most four viewers** at a time.
 - The iPad app's USB port only accepts connections on its loopback address,
   i.e. through the USB tunnel, not from the network.
@@ -332,6 +411,9 @@ through `iproxy`. The wire format is the same as over Wi-Fi.
   there.
 - **Screen Recording permission resets on every rebuild** unless you run
   `./setup-signing.sh`.
+- **Touch needs Accessibility permission**, which resets on every rebuild
+  the same way. The first touch prompts for it; until it's granted the
+  pointer doesn't move.
 
 ## Wire protocol
 
@@ -377,6 +459,23 @@ with `key=...` in that case. No code is involved.
 **Afterwards**, both directions carry `mode=wifi` / `mode=usb` whenever the
 mode changes (the Mac also sends it right after connecting), and `ping`
 every two seconds as a heartbeat.
+
+**Touches.** The iPad sends `touch=down,<x>,<y>`, `touch=move,<x>,<y>` and
+`touch=up,<x>,<y>`, positioned across the picture as 0-10000 — the same
+normalized coordinates as the cursor messages, which travel the other way.
+The Mac turns them into a left click: the button goes down, drags follow
+while it's held, up releases it. It's just another control message, so an
+older Mac ignores it and an older iPad app sends none, and the magic stays
+`IPSCRN03`.
+
+**What the iPad reports back.** Once a second it sends
+`stats=<decode ms>,<drawn fps>,<dropped>`: the average time a frame took to
+decode, the frames it actually drew, and how many it threw away since
+connecting. From its own send queue the Mac can't tell a link that is full
+from a device that is saturated, so the quality controller uses these: a
+drop on the iPad means the frames arrived and the decoder couldn't keep up,
+and while decode time is above about 25 ms it stops raising quality rather
+than handing the device bigger frames. An older Mac ignores the line.
 
 The Wi-Fi/USB setting is shared: changing it on either side changes it on
 both. In USB mode the stream falls back to Wi-Fi while no cable is attached.

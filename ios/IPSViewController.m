@@ -14,6 +14,14 @@ static NSString * const kHostKey = @"IPSHost";
 static NSString * const kDeviceIDKey = @"IPSDeviceID";
 static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
 
+/// Fastest rate at which a decoded frame is uploaded to the screen layer.
+/// Uploading a full frame is the most expensive thing this app does on the
+/// main thread, and on an iPad 2 it is what makes the cursor stutter: at 60
+/// uploads a second the main thread never idles, so pointer updates wait
+/// behind them. Frames above this rate are skipped and the newest one goes up
+/// as soon as the previous upload has settled.
+static const NSTimeInterval kMinPresentInterval = 1.0 / 30.0;
+
 @interface IPSViewController () <IPSSettingsPanelDelegate, IPSDiscoveryDelegate, StreamClientDelegate,
                                  UIAlertViewDelegate, UITextFieldDelegate>
 @end
@@ -60,11 +68,20 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     int _cursorHotX, _cursorHotY, _cursorPixelsW, _cursorPixelsH;
     BOOL _cursorMoved;          // position changed since the last tick
 
+    // The finger currently driving the Mac's pointer. Extra fingers are
+    // ignored: two fingers fight over one mouse, and a stray second finger
+    // touching the bezel used to jump the cursor across the screen. Not
+    // retained; it's only compared against the touches still in flight.
+    UITouch *_activeTouch;
+
     UILabel *_statusLabel;
 
     // Sequence of the last frame put on screen; stops us re-uploading the
     // same frame. No point running the compositor when nothing new arrived.
     uint64_t _displayedSequence;
+    // When the last frame was handed to the screen layer, for the present
+    // rate limit.
+    CFAbsoluteTime _lastPresent;
 
     // fps measurement
     NSUInteger _drawnFrames;
@@ -164,8 +181,11 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     _screenLayer.contentsGravity = kCAGravityResizeAspect;
     _screenLayer.opaque = YES;              // no blending over the window
     _screenLayer.contentsScale = 1.0;       // the iPad 2 isn't Retina
-    _screenLayer.magnificationFilter = kCAFilterNearest;
-    _screenLayer.minificationFilter = kCAFilterNearest;
+    // Smooth when the picture isn't drawn 1:1 (a resolution scale below
+    // 100%: the Mac shrinks it, this scales it back up). Nearest turns small
+    // text into stair-steps there. At 1:1 no filtering happens either way.
+    _screenLayer.magnificationFilter = kCAFilterLinear;
+    _screenLayer.minificationFilter = kCAFilterLinear;
     _screenLayer.backgroundColor = [UIColor blackColor].CGColor;
     [self.view.layer addSublayer:_screenLayer];
 
@@ -201,11 +221,9 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     // Give USB a head start before trying Wi-Fi.
     _usbGraceUntil = CFAbsoluteTimeGetCurrent() + 4.0;
 
-    // Tapping the screen while a code is needed brings the popup back.
-    UITapGestureRecognizer *tap =
-        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(screenTapped)];
-    [self.view addGestureRecognizer:tap];
-    [tap release];
+    // Touches on the picture go to the Mac (see "Touch → Mac" below). No tap
+    // gesture recognizer: it would cancel the touches mid-drag once it
+    // recognised, and the code popup is handled there instead.
 
     _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
     // Check on every vsync (60 Hz) so a 40-60 fps stream doesn't skip
@@ -278,7 +296,14 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     uint64_t seq = 0;
     CGImageRef frame = [_client copyLatestFrame:&seq];
     if (frame) {
-        if (seq != _displayedSequence) {
+        // Uploading at the full stream rate starves the main thread, and the
+        // cursor is moved on that same thread. Skip frames the screen can't
+        // be showing anyway; the newest one goes up at the next refresh.
+        BOOL first = (_displayedSequence == 0);
+        CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+        if (seq != _displayedSequence
+            && (first || now - _lastPresent >= kMinPresentInterval)) {
+            _lastPresent = now;
             _displayedSequence = seq;
             // Implicit animation off: setting `contents` on a bare layer
             // starts a 0.25 s crossfade by default. At 40 times a second
@@ -299,6 +324,62 @@ static NSString * const kDeviceKeyKey = @"IPSDeviceKey";
     }
 
     [self updateStatsIfNeeded];
+}
+
+#pragma mark - Touch → Mac
+
+/// Sends one touch phase to the Mac, normalized to the picture (0-10000),
+/// exactly like cursor messages travel the other way. Returns NO when there's
+/// no stream, or when the point is outside the picture (the letterbox bars),
+/// so a touch there does nothing rather than clicking the wrong place.
+- (BOOL)sendTouch:(UITouch *)touch phase:(const char *)phase allowOutside:(BOOL)allowOutside {
+    if (!_client.connected || _screenLayer.contents == nil) return NO;
+
+    CGRect picture = _screenLayer.frame;
+    if (picture.size.width <= 0 || picture.size.height <= 0) return NO;
+
+    CGPoint point = [touch locationInView:self.view];
+    if (!allowOutside && !CGRectContainsPoint(picture, point)) return NO;
+
+    // A drag that leaves the picture is clamped to the edge, like dragging a
+    // mouse past the edge of the screen, instead of stopping dead.
+    CGFloat nx = (point.x - picture.origin.x) / picture.size.width;
+    CGFloat ny = (point.y - picture.origin.y) / picture.size.height;
+    nx = MAX(0.0, MIN(1.0, nx));
+    ny = MAX(0.0, MIN(1.0, ny));
+
+    [_client sendControl:[NSString stringWithFormat:@"touch=%s,%d,%d",
+                          phase, (int)(nx * 10000.0 + 0.5), (int)(ny * 10000.0 + 0.5)]];
+    return YES;
+}
+
+- (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (_activeTouch) return;
+    UITouch *touch = [touches anyObject];
+    if (![self sendTouch:touch phase:"down" allowOutside:NO]) return;
+    _activeTouch = touch;
+}
+
+- (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (!_activeTouch || ![touches containsObject:_activeTouch]) return;
+    [self sendTouch:_activeTouch phase:"move" allowOutside:YES];
+}
+
+- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (_activeTouch && [touches containsObject:_activeTouch]) {
+        [self sendTouch:_activeTouch phase:"up" allowOutside:YES];
+        _activeTouch = nil;
+    }
+    // Nothing is connected, so there's nothing to click: a tap on the message
+    // asks for the pairing code, as before.
+    if (_authBlocked) [self screenTapped];
+}
+
+- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
+    if (_activeTouch && [touches containsObject:_activeTouch]) {
+        [self sendTouch:_activeTouch phase:"up" allowOutside:YES];
+        _activeTouch = nil;
+    }
 }
 
 #pragma mark - Cursor overlay
@@ -350,6 +431,10 @@ static NSData *IPSDataFromBase64(const char *s, size_t len) {
         _cursorX = x;
         _cursorY = y;
         _cursorMoved = YES;
+        // Move it now rather than on the next display refresh: that refresh
+        // can be busy uploading a frame, and the pointer is what the user is
+        // watching.
+        [self applyCursor];
         return;
     }
 
@@ -368,6 +453,7 @@ static NSData *IPSDataFromBase64(const char *s, size_t len) {
         _cursorPixelsW = w; _cursorPixelsH = h;
         _cursorOverlay = YES;
         _cursorMoved = YES;
+        [self applyCursor];
     }
 }
 
@@ -451,6 +537,18 @@ static NSData *IPSDataFromBase64(const char *s, size_t len) {
                         mbps:mbps
                      dropped:_client.framesDropped
                    frameSize:CGSizeMake(_client.frameWidth, _client.frameHeight)];
+
+    // Tell the Mac what only this side knows. From its own send queue it
+    // can't tell a slow link from a slow decoder, and the answer decides
+    // whether smaller frames are worth anything: a frame that arrived and was
+    // dropped here means the Mac's sending was fine and this device is the
+    // limit.
+    if (_client.connected) {
+        [_client sendControl:[NSString stringWithFormat:@"stats=%.1f,%d,%lu",
+                              _client.averageDecodeMS,
+                              (int)(drawFPS + 0.5),
+                              (unsigned long)_client.framesDropped]];
+    }
 
     _drawnFrames = 0;
     _lastReceivedCount = received;

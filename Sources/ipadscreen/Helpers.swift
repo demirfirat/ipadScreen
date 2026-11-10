@@ -11,13 +11,21 @@ func displayName(_ display: SCDisplay) -> String {
     return screen?.localizedName ?? "Display \(display.displayID)"
 }
 
-/// Virtual displays from BetterDisplay and similar tools carry "virtual"
-/// (or the localized "sanal" on Turkish systems) in their name. That's more
-/// reliable than looking at size: a HiDPI virtual display can have more
-/// pixels than a physical monitor.
+/// The display this app creates is named iPadScreen. BetterDisplay and
+/// similar tools carry "virtual" (or the localized "sanal" on Turkish
+/// systems) in their name. That's more reliable than looking at size: a HiDPI
+/// virtual display can have more pixels than a physical monitor.
 func isVirtualDisplay(_ display: SCDisplay) -> Bool {
     let name = displayName(display).lowercased()
-    return name.contains("sanal") || name.contains("virtual") || name.contains("dummy")
+    return name.contains(VirtualDisplay.defaultName.lowercased())
+        || name.contains("sanal") || name.contains("virtual") || name.contains("dummy")
+}
+
+/// True for a display this app made, including one an earlier run left
+/// behind: once that process is gone, the name is all that ties it to us,
+/// which is what lets the side setting move it.
+func isOurDisplay(_ display: SCDisplay) -> Bool {
+    displayName(display).lowercased().contains(VirtualDisplay.defaultName.lowercased())
 }
 
 /// Sending a HiDPI display to the iPad as-is is wasted work: there's no

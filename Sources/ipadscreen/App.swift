@@ -229,6 +229,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         state.onDisplayChanged = { [weak self] in
             Task { @MainActor in await self?.engine.applyScale() }
         }
+        state.onDisplaySideChanged = { [weak self] in
+            Task { @MainActor in self?.engine.applyDisplaySide() }
+        }
         state.onConnectionModeChanged = { [weak self] in
             Task { @MainActor in await self?.engine.applyConnectionMode() }
         }
