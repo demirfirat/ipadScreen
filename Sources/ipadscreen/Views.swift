@@ -8,17 +8,15 @@ struct MenuBarPanel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 10) {
             header
-            Divider()
             AlertBanner(state: state)
-            controls
-            Divider()
-            stats
-            Divider()
+            GlassSurface { controls }
+            GlassSurface { stats }
             footer
         }
-        .frame(width: 320)
+        .padding(12)
+        .frame(width: 340)
     }
 
     private var header: some View {
@@ -37,6 +35,7 @@ struct MenuBarPanel: View {
             PairingCodeView(state: state, compact: true)
             ConnectionPicker(state: state)
             DisplayPicker(state: state)
+            DisplaySidePicker(state: state)
             FPSSlider(state: state)
             QualityControl(state: state)
             ScaleSlider(state: state)
@@ -54,37 +53,44 @@ struct MenuBarPanel: View {
             }
             Sparkline(values: state.fpsHistory, maximum: Double(max(state.targetFPS, 1)))
                 .frame(height: 28)
+
+            // Decode time only exists on the iPad, and it's the number that
+            // says whether the link or the device is the limit.
+            if state.clientDecodeMS > 0 {
+                HStack(spacing: 4) {
+                    Text("iPad")
+                    Text(String(format: "%.0f fps", state.clientFPS))
+                    Text("·")
+                    Text(String(format: "%.1f ms decode", state.clientDecodeMS))
+                }
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
     }
 
     private var footer: some View {
-        HStack {
-            Button(state.isRunning ? "Stop" : "Start") {
-                state.onStartStop?(!state.isRunning)
-            }
-            .keyboardShortcut(.defaultAction)
+        GlassGroup(spacing: 8) {
+            HStack(spacing: 8) {
+                StartStopButton(isRunning: state.isRunning, defaultAction: true) {
+                    state.onStartStop?(!state.isRunning)
+                }
 
-            Spacer()
+                Spacer(minLength: 0)
 
-            Button {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                Image(systemName: "macwindow")
-            }
-            .help("Open window")
+                GlassIconButton(systemName: "macwindow", help: "Open window") {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
 
-            Button {
-                NSApp.terminate(nil)
-            } label: {
-                Image(systemName: "power")
+                GlassIconButton(systemName: "power", help: "Quit") {
+                    NSApp.terminate(nil)
+                }
             }
-            .help("Quit")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 2)
     }
 }
 
@@ -118,15 +124,20 @@ struct MainWindow: View {
             // Live frame rate chart. The picture itself isn't shown here:
             // drawing a second copy would add load to the stream capturing
             // the mirrored display.
-            Sparkline(values: state.fpsHistory, maximum: Double(max(state.targetFPS, 1)))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            GlassSurface {
+                Sparkline(values: state.fpsHistory, maximum: Double(max(state.targetFPS, 1)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(12)
+            }
 
             HStack(spacing: 20) {
                 StatItem(value: String(format: "%.0f", state.currentFPS), unit: "fps")
                 StatItem(value: String(format: "%.0f", state.currentQuality * 100), unit: "% quality")
                 StatItem(value: String(format: "%.1f", state.megabitsPerSecond), unit: "Mbps")
                 StatItem(value: "\(state.clientCount)", unit: "devices")
+                StatItem(value: state.clientDecodeMS > 0
+                            ? String(format: "%.1f", state.clientDecodeMS) : "—",
+                         unit: "ms on iPad")
             }
         }
         .padding(18)
@@ -134,26 +145,32 @@ struct MainWindow: View {
 
     private var sidebar: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 Text("Settings")
                     .font(.system(size: 13, weight: .semibold))
+                    .padding(.leading, 4)
 
-                PairingCodeView(state: state, compact: false)
+                GlassSurface {
+                    VStack(alignment: .leading, spacing: 16) {
+                        PairingCodeView(state: state, compact: false)
+                        Divider()
+                        ConnectionPicker(state: state)
+                        DisplayPicker(state: state)
+                        DisplaySidePicker(state: state)
+                    }
+                    .padding(14)
+                }
 
-                Divider()
+                GlassSurface {
+                    VStack(alignment: .leading, spacing: 16) {
+                        FPSSlider(state: state)
+                        QualityControl(state: state)
+                        ScaleSlider(state: state)
+                    }
+                    .padding(14)
+                }
 
-                ConnectionPicker(state: state)
-                DisplayPicker(state: state)
-
-                Divider()
-
-                FPSSlider(state: state)
-                QualityControl(state: state)
-                ScaleSlider(state: state)
-
-                Divider()
-
-                Button(state.isRunning ? "Stop" : "Start") {
+                StartStopButton(isRunning: state.isRunning) {
                     state.onStartStop?(!state.isRunning)
                 }
                 .controlSize(.large)
@@ -161,6 +178,108 @@ struct MainWindow: View {
             }
             .padding(18)
         }
+    }
+}
+
+// MARK: - Liquid Glass
+
+/// A glass card on macOS 26 and later, a plain material before that.
+///
+/// The app targets macOS 14 and Liquid Glass only exists from macOS 26, so
+/// every use goes through here instead of spreading availability checks
+/// through the layout.
+struct GlassSurface<Content: View>: View {
+    var cornerRadius: CGFloat = 14
+    private let content: () -> Content
+
+    init(cornerRadius: CGFloat = 14, @ViewBuilder content: @escaping () -> Content) {
+        self.cornerRadius = cornerRadius
+        self.content = content
+    }
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            content()
+                .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+        } else {
+            content()
+                .background(.ultraThinMaterial,
+                            in: RoundedRectangle(cornerRadius: cornerRadius))
+        }
+    }
+}
+
+/// Lets neighbouring glass pieces blend instead of stacking, as Apple's
+/// Liquid Glass guidance asks. A plain container before macOS 26.
+struct GlassGroup<Content: View>: View {
+    var spacing: CGFloat = 10
+    private let content: () -> Content
+
+    init(spacing: CGFloat = 10, @ViewBuilder content: @escaping () -> Content) {
+        self.spacing = spacing
+        self.content = content
+    }
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { content() }
+        } else {
+            content()
+        }
+    }
+}
+
+/// Glass button styles on macOS 26, ordinary bordered buttons before it.
+private struct GlassButtonModifier: ViewModifier {
+    var prominent = false
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            if prominent {
+                content.buttonStyle(.glassProminent)
+            } else {
+                content.buttonStyle(.glass)
+            }
+        } else if prominent {
+            content.buttonStyle(.borderedProminent)
+        } else {
+            content.buttonStyle(.bordered)
+        }
+    }
+}
+
+/// Start/Stop, the one prominent action in both surfaces.
+struct StartStopButton: View {
+    let isRunning: Bool
+    var defaultAction = false
+    let action: () -> Void
+
+    var body: some View {
+        if defaultAction {
+            button.keyboardShortcut(.defaultAction)
+        } else {
+            button
+        }
+    }
+
+    private var button: some View {
+        Button(isRunning ? "Stop" : "Start", action: action)
+            .modifier(GlassButtonModifier(prominent: true))
+    }
+}
+
+struct GlassIconButton: View {
+    let systemName: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+        }
+        .modifier(GlassButtonModifier())
+        .help(help)
     }
 }
 
@@ -304,6 +423,37 @@ struct DisplayPicker: View {
                 }
             }
             .labelsHidden()
+
+            if !state.iPadModelLabel.isEmpty {
+                Text("iPad: \(state.iPadModelLabel)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+}
+
+/// Which side of the Mac's screen the virtual display is created on.
+struct DisplaySidePicker: View {
+    @ObservedObject var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Virtual display side")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: $state.displaySide) {
+                ForEach(VirtualDisplaySide.allCases) { side in
+                    Text(side.title).tag(side)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Text("Which side of the Mac's screen the iPad's display sits on.")
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
         }
     }
 }

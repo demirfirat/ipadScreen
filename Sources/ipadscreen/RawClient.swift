@@ -27,7 +27,10 @@ enum LinkMode: String {
 /// it's set, the payload is a UTF-8 control message such as "mode=usb", and
 /// the remaining 31 bits are its length.
 ///
-/// iPad → Mac: newline-terminated UTF-8 control messages.
+/// iPad → Mac: newline-terminated UTF-8 control messages — `hello`, `ping`,
+/// `mode=wifi`, `touch=<down|move|up>,<x>,<y>` for the touchscreen (see
+/// `TouchInput`), and `stats=<decode ms>,<drawn fps>,<dropped>` once a second
+/// (see `ClientStats`).
 ///
 /// See `PairingCrypto` for how a Wi-Fi connection is authenticated.
 ///
@@ -169,6 +172,37 @@ struct ControlLineReader {
         // A client that never sends a newline shouldn't grow this forever.
         if buffer.count > 4096 { buffer.removeAll() }
         return lines
+    }
+}
+
+/// What the iPad reports about its own decoding, once a second.
+///
+/// From the Mac's side a stalled send queue has two possible causes that look
+/// identical: a link that can't carry the frames, or a device that can't
+/// decode them. Only the iPad can tell them apart, and only the second one is
+/// worth answering with smaller frames.
+struct ClientStats: Equatable {
+    /// Average time a frame took to decode over the last second, in ms.
+    var decodeMS: Double
+    /// Frames the iPad actually drew per second.
+    var fps: Double
+    /// Frames it threw away since connecting: it is being handed more than it
+    /// can decode.
+    var dropped: UInt64
+
+    /// Parses "stats=18.4,35,2". Nil for anything else, including a line from
+    /// an iPad app that doesn't have this yet.
+    static func parse(_ message: String) -> ClientStats? {
+        guard message.hasPrefix("stats=") else { return nil }
+        let parts = message.dropFirst(6).split(separator: ",")
+        guard parts.count == 3,
+              let decodeMS = Double(parts[0]),
+              let fps = Double(parts[1]),
+              let dropped = UInt64(parts[2]),
+              decodeMS >= 0, decodeMS < 10_000,
+              fps >= 0, fps < 10_000
+        else { return nil }
+        return ClientStats(decodeMS: decodeMS, fps: fps, dropped: dropped)
     }
 }
 
@@ -372,13 +406,21 @@ final class RawStreamClient: FrameSink {
     /// stay stale until the next change.
     private var stale: EncodedFrame?
 
+    /// Frames skipped because the write slot was busy.
+    private var dropped: UInt64 = 0
+
     func send(_ frame: EncodedFrame) {
         stateLock.lock()
         guard isOpen, case .done = handshake else {
             stateLock.unlock()
             return
         }
-        guard inFlight < 2 else {
+        // One frame on the wire, one newest frame waiting for it. Anything
+        // deeper adds latency to the picture and, because cursor messages
+        // share this connection, to the pointer as well.
+        guard inFlight < 1 else {
+            // A frame already waiting is about to be replaced by this one.
+            if stale != nil { dropped &+= 1 }
             stale = frame
             stateLock.unlock()
             return
@@ -395,7 +437,7 @@ final class RawStreamClient: FrameSink {
             guard let self else { return }
             self.stateLock.lock()
             self.inFlight -= 1
-            let next = self.isOpen && self.inFlight < 2 ? self.stale : nil
+            let next = self.isOpen && self.inFlight < 1 ? self.stale : nil
             if next != nil {
                 self.stale = nil
                 self.inFlight += 1
@@ -415,6 +457,11 @@ final class RawStreamClient: FrameSink {
     var pendingWrites: Int {
         stateLock.lock(); defer { stateLock.unlock() }
         return inFlight
+    }
+
+    var droppedFrames: UInt64 {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return dropped
     }
 
     func close() {

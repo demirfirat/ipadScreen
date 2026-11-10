@@ -31,6 +31,15 @@ final class AppState: ObservableObject {
     @Published var megabitsPerSecond: Double = 0
     @Published var frameSize: CGSize = .zero
 
+    /// What the iPad reports about its own decoding, once a second. Zero
+    /// until it says; an iPad app without the `stats=` line never does.
+    @Published var clientDecodeMS: Double = 0
+    @Published var clientFPS: Double = 0
+
+    /// The iPad the virtual display was sized for, e.g. "iPad 2 — 1024×768".
+    /// Empty until a start has looked for one.
+    @Published var iPadModelLabel = ""
+
     /// Frame rate over the last 60 seconds; drives the chart in the UI.
     @Published var fpsHistory: [Double] = []
 
@@ -49,6 +58,11 @@ final class AppState: ObservableObject {
     }
     @Published var scale: Double {
         didSet { Settings.shared.scale = scale; onScaleChanged?() }
+    }
+
+    /// Side of the Mac's screen the virtual display is placed on.
+    @Published var displaySide: VirtualDisplaySide {
+        didSet { Settings.shared.displaySide = displaySide; onDisplaySideChanged?() }
     }
 
     // Display selection
@@ -71,6 +85,7 @@ final class AppState: ObservableObject {
     var onSettingsChanged: (() -> Void)?
     var onScaleChanged: (() -> Void)?
     var onDisplayChanged: (() -> Void)?
+    var onDisplaySideChanged: (() -> Void)?
     var onConnectionModeChanged: (() -> Void)?
     var onStartStop: ((Bool) -> Void)?
     var onRegenerateCode: (() -> Void)?
@@ -82,6 +97,7 @@ final class AppState: ObservableObject {
         autoQuality = s.autoQuality
         manualQuality = s.quality
         scale = s.scale
+        displaySide = s.displaySide
         selectedDisplayID = s.displayID
 
         // Show a meaningful value before capture starts; otherwise the

@@ -22,6 +22,8 @@ final class Settings {
         static let scale = "scale"
         static let useUSB = "useUSB"
         static let displayID = "displayID"
+        static let displaySide = "displaySide"
+        static let iPadModel = "iPadModel"
         static let port = "port"
         static let pairingCode = "pairingCode"
         static let pairedDevices = "pairedDevices"
@@ -30,7 +32,9 @@ final class Settings {
     private init() {
         defaults.register(defaults: [
             Key.fps: 45,
-            Key.quality: 0.52,
+            // The live stream has to fit an iPad 2's Wi-Fi link; the sharp
+            // still frame sent when the picture stops is what carries detail.
+            Key.quality: 0.50,
             Key.autoQuality: true,
             Key.scale: 1.0,
             // USB first: with the cable attached the iPad connects without a
@@ -78,6 +82,26 @@ final class Settings {
     var displayID: UInt32 {
         get { read { UInt32(defaults.integer(forKey: Key.displayID)) } }
         set { write { defaults.set(Int(newValue), forKey: Key.displayID) } }
+    }
+
+    /// Side of the Mac's screen the virtual display is created on. The window
+    /// server's own choice was the left, which isn't where most people want a
+    /// second screen, so the default is the right.
+    var displaySide: VirtualDisplaySide {
+        get {
+            read {
+                VirtualDisplaySide(rawValue: defaults.string(forKey: Key.displaySide) ?? "")
+                    ?? .right
+            }
+        }
+        set { write { defaults.set(newValue.rawValue, forKey: Key.displaySide) } }
+    }
+
+    /// Model of the last iPad seen, used to size the virtual display when no
+    /// iPad is attached at launch.
+    var iPadModel: IPadModel {
+        get { read { IPadModel(identifier: defaults.string(forKey: Key.iPadModel) ?? "") } }
+        set { write { defaults.set(newValue.identifier, forKey: Key.iPadModel) } }
     }
 
     var port: UInt16 {
